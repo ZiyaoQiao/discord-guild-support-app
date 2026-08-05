@@ -1,0 +1,442 @@
+import { InteractionResponseType, InteractionType } from './constants.js';
+import { fetchOfficialNews } from './integrations/official-news.js';
+import {
+  fetchSteamAchievementPercentages,
+  fetchSteamCurrentPlayers,
+} from './integrations/steam.js';
+import { searchWiki } from './integrations/wiki.js';
+import {
+  consumeMemeCandidate,
+  rememberMemeCandidates,
+  searchMemeStickers,
+} from './integrations/meme-stickers.js';
+import { translateText } from './integrations/translate.js';
+import { postChannelMessage } from './discord.js';
+import {
+  addMessageReactionRule,
+  createLfg,
+  getMessageReactionRules,
+  getProfile,
+  joinLfg,
+  listOpenLfg,
+  removeMessageReactionRule,
+  saveBuild,
+  saveMessageReactionRule,
+  saveProfile,
+  searchBuilds,
+  voteBuild,
+} from './storage.js';
+import { resolveGuildEmojiName } from './gateway-reactions.js';
+import {
+  buildSupportLogMessage,
+  buildSupportTicket,
+  extractModalValues,
+  getInteractionUser,
+  getOption,
+} from './support.js';
+import {
+  buildSavedMessage,
+  buildSearchMessage,
+  buildVoteButtons,
+  buildVotedMessage,
+  commandErrorMessage,
+  ephemeral,
+  eventDraftMessage,
+  guideButtons,
+  guideMessage,
+  lfgButtons,
+  lfgCreatedMessage,
+  lfgJoinedMessage,
+  lfgListMessage,
+  autoReactionAccessDeniedMessage,
+  autoReactionRuleClearedMessage,
+  autoReactionRuleNotFoundMessage,
+  autoReactionRuleSavedMessage,
+  autoReactionRulesMessage,
+  memeCandidateEmbed,
+  memePostButtons,
+  memeSearchEmbeds,
+  memeSearchMessage,
+  newsMessage,
+  presenceInfoMessage,
+  profileSavedMessage,
+  profileViewMessage,
+  publicMessage,
+  resourcesMessage,
+  steamAchievementsMessage,
+  steamStatusMessage,
+  supportDetailsModal,
+  supportNeedsDetailsMessage,
+  supportSubmittedMessage,
+  translateMessage,
+  updateMessage,
+  useCasesMessage,
+  wikiSearchMessage,
+} from './views.js';
+
+function getSubcommand(options = []) {
+  return options.find((option) => Array.isArray(option.options));
+}
+
+function getUserId(interaction) {
+  return getInteractionUser(interaction).id;
+}
+
+function splitChannelIds(value) {
+  return String(value || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function canEditAutoReaction(interaction) {
+  const roleId = process.env.MESSAGE_REACTION_ADMIN_ROLE_ID;
+  return Boolean(roleId && interaction.member?.roles?.includes(roleId));
+}
+
+function readAutoReactionRuleIdentity(options) {
+  const userId = String(getOption(options, 'user_id', '')).trim();
+  if (!/^\d{17,22}$/.test(userId)) {
+    throw new Error('目标用户 ID 格式不正确。');
+  }
+
+  const emojiName = String(getOption(options, 'emoji_name', getOption(options, 'emoji', ''))).trim();
+  if (!emojiName) {
+    throw new Error('请提供服务器自定义表情名称。');
+  }
+
+  return {
+    userId,
+    emojiName,
+    channelIds: splitChannelIds(getOption(options, 'channel_ids', '')),
+  };
+}
+
+async function readAutoReactionRuleOptions(interaction, options) {
+  const identity = readAutoReactionRuleIdentity(options);
+  const emoji = await resolveGuildEmojiName(
+    identity.emojiName,
+    interaction.guild_id,
+  );
+
+  return {
+    ...identity,
+    ...emoji,
+  };
+}
+
+async function submitSupportTicket(interaction, fields) {
+  const ticket = buildSupportTicket(interaction, fields);
+  const supportChannelId = process.env.SUPPORT_CHANNEL_ID;
+  const canPostSupportTicket = Boolean(supportChannelId && process.env.DISCORD_TOKEN);
+
+  if (canPostSupportTicket) {
+    postChannelMessage(supportChannelId, buildSupportLogMessage(ticket)).catch((error) => {
+      console.error('Failed to post support ticket', error);
+    });
+  }
+
+  return ephemeral(supportSubmittedMessage(ticket, canPostSupportTicket));
+}
+
+async function handleSupportCommand(interaction, options) {
+  const category = getOption(options, 'category', 'other');
+  const urgency = getOption(options, 'urgency', 'normal');
+  const details = getOption(options, 'details', '');
+
+  if (!details.trim()) {
+    return supportNeedsDetailsMessage(category, urgency);
+  }
+
+  return submitSupportTicket(interaction, { category, urgency, details });
+}
+
+async function handleProfileCommand(interaction, options) {
+  const subcommand = getSubcommand(options);
+  const subOptions = subcommand?.options ?? [];
+  const userId = getUserId(interaction);
+
+  if (subcommand?.name === 'set') {
+    const profile = await saveProfile(interaction.guild_id, userId, {
+      characterName: getOption(subOptions, 'character'),
+      role: getOption(subOptions, 'role', 'casual'),
+      weapons: getOption(subOptions, 'weapons', ''),
+      innerWays: getOption(subOptions, 'inner_ways', ''),
+      sect: getOption(subOptions, 'sect', ''),
+      server: getOption(subOptions, 'server', ''),
+      timezone: getOption(subOptions, 'timezone', ''),
+    });
+    return ephemeral(profileSavedMessage(profile));
+  }
+
+  const profile = await getProfile(interaction.guild_id, userId);
+  return ephemeral(profileViewMessage(userId, profile));
+}
+
+async function handleLfgCommand(interaction, options) {
+  const subcommand = getSubcommand(options);
+  const subOptions = subcommand?.options ?? [];
+  const userId = getUserId(interaction);
+
+  if (subcommand?.name === 'create') {
+    const entry = await createLfg(interaction.guild_id, userId, {
+      activity: getOption(subOptions, 'activity', 'other'),
+      startsAt: getOption(subOptions, 'time'),
+      note: getOption(subOptions, 'note', ''),
+    });
+    return publicMessage(lfgCreatedMessage(entry), lfgButtons(entry));
+  }
+
+  const entries = await listOpenLfg(interaction.guild_id);
+  return ephemeral(lfgListMessage(entries));
+}
+
+async function handleBuildCommand(interaction, options) {
+  const subcommand = getSubcommand(options);
+  const subOptions = subcommand?.options ?? [];
+  const userId = getUserId(interaction);
+
+  if (subcommand?.name === 'share') {
+    const build = await saveBuild(interaction.guild_id, userId, {
+      name: getOption(subOptions, 'name'),
+      weapon: getOption(subOptions, 'weapon'),
+      role: getOption(subOptions, 'role'),
+      innerWays: getOption(subOptions, 'inner_ways', ''),
+      notes: getOption(subOptions, 'notes', ''),
+    });
+    return publicMessage(buildSavedMessage(build));
+  }
+
+  const query = getOption(subOptions, 'query', '');
+  const builds = await searchBuilds(interaction.guild_id, query);
+  return ephemeral(buildSearchMessage(query, builds), buildVoteButtons(builds));
+}
+
+async function handleAutoReactionCommand(interaction, options) {
+  const subcommand = getSubcommand(options);
+  const subOptions = subcommand?.options ?? [];
+  const adminRoleId = process.env.MESSAGE_REACTION_ADMIN_ROLE_ID;
+
+  if (subcommand?.name === 'view') {
+    return ephemeral(autoReactionRulesMessage(await getMessageReactionRules(interaction.guild_id)));
+  }
+
+  if (!canEditAutoReaction(interaction)) {
+    return ephemeral(autoReactionAccessDeniedMessage(adminRoleId));
+  }
+
+  if (subcommand?.name === 'clear') {
+    const removed = await removeMessageReactionRule(
+      interaction.guild_id,
+      readAutoReactionRuleIdentity(subOptions),
+    );
+    return ephemeral(removed
+      ? autoReactionRuleClearedMessage(removed)
+      : autoReactionRuleNotFoundMessage());
+  }
+
+  if (subcommand?.name === 'set' || subcommand?.name === 'add') {
+    const payload = {
+      ...await readAutoReactionRuleOptions(interaction, subOptions),
+      updatedBy: getUserId(interaction),
+    };
+    const rule = subcommand.name === 'add'
+      ? await addMessageReactionRule(interaction.guild_id, payload)
+      : await saveMessageReactionRule(interaction.guild_id, payload);
+
+    return ephemeral(autoReactionRuleSavedMessage(rule));
+  }
+
+  return ephemeral('未知自动反应操作。');
+}
+
+async function handleCommand(interaction) {
+  const { name, options = [] } = interaction.data;
+
+  if (name === 'support') {
+    return handleSupportCommand(interaction, options);
+  }
+
+  if (name === 'wwm-guide') {
+    const topic = getOption(options, 'topic', 'daily');
+    return publicMessage(guideMessage(topic), guideButtons(topic));
+  }
+
+  if (name === 'event-plan') {
+    return publicMessage(
+      eventDraftMessage({
+        activity: getOption(options, 'activity'),
+        startsAt: getOption(options, 'time'),
+        note: getOption(options, 'note'),
+      }),
+    );
+  }
+
+  if (name === 'news') {
+    return ephemeral(newsMessage(await fetchOfficialNews()));
+  }
+
+  if (name === 'steam') {
+    const topic = getOption(options, 'topic', 'status');
+    if (topic === 'achievements') {
+      return ephemeral(steamAchievementsMessage(await fetchSteamAchievementPercentages()));
+    }
+    return ephemeral(steamStatusMessage(await fetchSteamCurrentPlayers()));
+  }
+
+  if (name === 'wiki') {
+    const query = getOption(options, 'query');
+    return ephemeral(wikiSearchMessage(query, await searchWiki(query)));
+  }
+
+  if (name === 'meme') {
+    const query = getOption(options, 'query');
+    const isPublic = Boolean(getOption(options, 'public', false));
+    const result = await searchMemeStickers(query);
+    const response = memeSearchMessage(query, result);
+    const embeds = memeSearchEmbeds(result);
+    if (isPublic) {
+      return publicMessage(response, [], embeds);
+    }
+    const selections = rememberMemeCandidates(result.results, getUserId(interaction), query);
+    return ephemeral(response, memePostButtons(selections), embeds);
+  }
+
+  if (name === 'translate') {
+    const text = getOption(options, 'text');
+    const target = getOption(options, 'target');
+    const isPublic = Boolean(getOption(options, 'public', false));
+    const result = await translateText({ text, target });
+    const response = translateMessage({ text, result });
+    return isPublic ? publicMessage(response) : ephemeral(response);
+  }
+
+  if (name === 'profile') {
+    return handleProfileCommand(interaction, options);
+  }
+
+  if (name === 'lfg') {
+    return handleLfgCommand(interaction, options);
+  }
+
+  if (name === 'build') {
+    return handleBuildCommand(interaction, options);
+  }
+
+  if (name === 'auto-reaction') {
+    return handleAutoReactionCommand(interaction, options);
+  }
+
+  if (name === 'resources') {
+    return ephemeral(resourcesMessage());
+  }
+
+  if (name === 'presence-info') {
+    return ephemeral(presenceInfoMessage());
+  }
+
+  if (name === 'use-cases') {
+    return ephemeral(useCasesMessage());
+  }
+
+  return ephemeral(`未知命令：${name}`);
+}
+
+async function handleComponent(interaction) {
+  const customId = interaction.data.custom_id;
+  const userId = getUserId(interaction);
+
+  if (customId.startsWith('guide:')) {
+    const topic = customId.split(':')[1];
+    return updateMessage(guideMessage(topic), guideButtons(topic));
+  }
+
+  if (customId.startsWith('support_details:')) {
+    const [, category = 'other', urgency = 'normal'] = customId.split(':');
+    return supportDetailsModal(category, urgency);
+  }
+
+  if (customId.startsWith('lfg_join:')) {
+    const [, lfgId] = customId.split(':');
+    const entry = await joinLfg(interaction.guild_id, lfgId, userId);
+    if (!entry) {
+      return ephemeral('这个组队已经不存在或无法加入。');
+    }
+    return updateMessage(lfgJoinedMessage(entry, userId), lfgButtons(entry));
+  }
+
+  if (customId.startsWith('build_vote:')) {
+    const [, buildId] = customId.split(':');
+    const build = await voteBuild(interaction.guild_id, buildId, userId);
+    if (!build) {
+      return ephemeral('这条配装记录已经不存在。');
+    }
+    return ephemeral(buildVotedMessage(build));
+  }
+
+  if (customId.startsWith('meme_post:')) {
+    const [, selectionId] = customId.split(':');
+    const entry = consumeMemeCandidate(selectionId, userId);
+    if (!entry) {
+      return ephemeral('这个表情包候选已经过期或已经发送过。请重新使用 `/meme` 搜索。');
+    }
+
+    if (entry.ownerMismatch) {
+      return ephemeral('只有发起搜索的人可以发送这个表情包候选。');
+    }
+
+    if (!interaction.channel_id) {
+      return ephemeral('无法识别当前频道，请重新使用 `/meme` 搜索。');
+    }
+
+    await postChannelMessage(interaction.channel_id, {
+      content: '',
+      embeds: [memeCandidateEmbed(entry.candidate)],
+    });
+
+    return updateMessage('', [], interaction.message?.embeds ?? []);
+  }
+
+  return ephemeral(`未知组件：${customId}`);
+}
+
+async function handleModalSubmit(interaction) {
+  const customId = interaction.data.custom_id;
+
+  if (customId.startsWith('support_submit:')) {
+    const [, category = 'other', urgency = 'normal'] = customId.split(':');
+    const values = extractModalValues(interaction.data.components);
+    return submitSupportTicket(interaction, {
+      category,
+      urgency,
+      details: values.details,
+    });
+  }
+
+  return ephemeral(`未知表单：${customId}`);
+}
+
+export async function handleInteraction(interaction) {
+  try {
+    if (interaction.type === InteractionType.PING) {
+      return { type: InteractionResponseType.PONG };
+    }
+
+    if (interaction.type === InteractionType.APPLICATION_COMMAND) {
+      return handleCommand(interaction);
+    }
+
+    if (interaction.type === InteractionType.MESSAGE_COMPONENT) {
+      return handleComponent(interaction);
+    }
+
+    if (interaction.type === InteractionType.MODAL_SUBMIT) {
+      return handleModalSubmit(interaction);
+    }
+
+    return ephemeral(`暂不支持的交互类型：${interaction.type}`);
+  } catch (error) {
+    console.error('Interaction failed', error);
+    return ephemeral(commandErrorMessage(error));
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "name": "discord-guild-support-app",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Starting point for a Where Winds Meet guild Discord support app.",
+  "type": "module",
+  "main": "src/app.js",
+  "engines": {
+    "node": ">=18.x"
+  },
+  "scripts": {
+    "start": "node src/app.js",
+    "dev": "nodemon src/app.js",
+    "register": "node src/commands.js",
+    "test": "node --test",
+    "check": "find src test -name '*.js' -exec node --check {} \\;"
+  },
+  "dependencies": {
+    "discord-interactions": "^4.0.0",
+    "dotenv": "^16.0.3",
+    "express": "^4.18.2",
+    "ws": "^8.21.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.0"
+  }
+}
