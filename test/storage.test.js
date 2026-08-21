@@ -72,5 +72,32 @@ describe('local guild store', () => {
     }), null);
     assert.equal((await storage.clearMessageReactionRules('guild-1')).length, 1);
     assert.equal((await storage.getMessageReactionRules('guild-1')).length, 0);
+
+    const schedule = await storage.saveScheduleMessage('guild-1', {
+      messageId: '1534651572061999304',
+      channelId: 'channel-2',
+      ownerId: 'user-1',
+      activity: '五人竞速',
+      formattedTime: '8/6/2026 周四 晚上（美东）',
+      eventAt: '2026-08-07T02:00:00.000Z',
+    });
+    assert.equal(schedule.ownerId, 'user-1');
+    assert.equal(
+      (await storage.getScheduleMessage('guild-1', '1534651572061999304')).channelId,
+      'channel-2',
+    );
+    assert.equal((await storage.listScheduleMessages())[0].guildId, 'guild-1');
+    await storage.updateScheduleMessage('guild-1', '1534651572061999304', {
+      reminderStatus: 'sent',
+    });
+    assert.equal(
+      (await storage.getScheduleMessage('guild-1', '1534651572061999304')).reminderStatus,
+      'sent',
+    );
+    assert.equal(
+      (await storage.removeScheduleMessage('guild-1', '1534651572061999304')).activity,
+      '五人竞速',
+    );
+    assert.equal(await storage.getScheduleMessage('guild-1', '1534651572061999304'), null);
   });
 });

@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, describe, it } from 'node:test';
 import { InteractionResponseType } from '../src/constants.js';
 import { handleInteraction } from '../src/interactions.js';
@@ -6,6 +9,9 @@ import { rememberMemeCandidates } from '../src/integrations/meme-stickers.js';
 
 const originalDiscordToken = process.env.DISCORD_TOKEN;
 const originalReactionAdminRoleId = process.env.MESSAGE_REACTION_ADMIN_ROLE_ID;
+const originalRecruitingChannelId = process.env.GROUP_RECRUITING_CHANNEL_ID;
+const originalRecruitingChannelName = process.env.GROUP_RECRUITING_CHANNEL_NAME;
+const originalDataDir = process.env.DATA_DIR;
 const originalFetch = globalThis.fetch;
 
 afterEach(() => {
@@ -21,10 +27,102 @@ afterEach(() => {
     process.env.MESSAGE_REACTION_ADMIN_ROLE_ID = originalReactionAdminRoleId;
   }
 
+  for (const [name, value] of [
+    ['GROUP_RECRUITING_CHANNEL_ID', originalRecruitingChannelId],
+    ['GROUP_RECRUITING_CHANNEL_NAME', originalRecruitingChannelName],
+    ['DATA_DIR', originalDataDir],
+  ]) {
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  }
+
   globalThis.fetch = originalFetch;
 });
 
 describe('interaction routing', () => {
+  it('posts parsed schedules and lets only the publisher cancel them', async () => {
+    process.env.DISCORD_TOKEN = 'test-token';
+    process.env.GROUP_RECRUITING_CHANNEL_ID = 'recruiting-channel';
+    process.env.DATA_DIR = await mkdtemp(join(tmpdir(), 'wwm-interactions-'));
+    const calls = [];
+    globalThis.fetch = async (url, requestOptions) => {
+      calls.push({
+        url,
+        method: requestOptions.method,
+        body: requestOptions.body ? JSON.parse(requestOptions.body) : undefined,
+      });
+      if (url.endsWith('/channels/recruiting-channel/messages')) {
+        return { ok: true, json: async () => ({ id: '1534651572061999304' }) };
+      }
+      if (url.endsWith('/channels/recruiting-channel/messages/1534651572061999304/threads')) {
+        return { ok: true, json: async () => ({ id: '1534651572061999305' }) };
+      }
+      return { ok: true };
+    };
+    const response = await handleInteraction({
+      type: 2,
+      guild_id: 'guild-1',
+      channel_id: 'source-channel',
+      member: { user: { id: 'user-1', username: 'tester' } },
+      data: {
+        name: 'schedule',
+        options: [
+          { name: 'time', value: '明晚十点' },
+          { name: 'zone', value: '美东' },
+          { name: 'activity', value: '五人竞速' },
+        ],
+      },
+    });
+    assert.equal(response.type, InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE);
+    assert.match(response.data.content, /已发布到 <#recruiting-channel>/);
+    assert.match(response.data.content, /1534651572061999304/);
+    assert.equal(calls.length, 3);
+    assert.match(calls[0].url, /\/channels\/recruiting-channel\/messages$/);
+    assert.match(calls[0].body.content, /^招募：五人竞速\n时间：\d{1,2}\/\d{1,2}\/\d{4} 周/);
+    assert.match(
+      calls[0].body.content,
+      /晚上 10:00（美东）\n发起人：<@user-1>\n\n👇 有意参加？请点击下方 👍 或任意表情报名！$/,
+    );
+    assert.match(
+      calls[1].url,
+      /\/channels\/recruiting-channel\/messages\/1534651572061999304\/reactions\/%F0%9F%91%8D\/@me$/,
+    );
+    assert.equal(calls[1].method, 'PUT');
+    assert.match(
+      calls[2].url,
+      /\/channels\/recruiting-channel\/messages\/1534651572061999304\/threads$/,
+    );
+    assert.equal(calls[2].body.name, '活动讨论｜五人竞速');
+
+    const denied = await handleInteraction({
+      type: 2,
+      guild_id: 'guild-1',
+      member: { user: { id: 'user-2', username: 'other' } },
+      data: {
+        name: 'cancel',
+        options: [{ name: 'message_id', value: '1534651572061999304' }],
+      },
+    });
+    assert.match(denied.data.content, /只有原发起人可以取消/);
+    assert.equal(calls.length, 3);
+
+    const cancelled = await handleInteraction({
+      type: 2,
+      guild_id: 'guild-1',
+      member: { user: { id: 'user-1', username: 'tester' } },
+      data: {
+        name: 'cancel',
+        options: [{ name: 'message_id', value: '1534651572061999304' }],
+      },
+    });
+    assert.match(cancelled.data.content, /已取消并撤回招募/);
+    assert.equal(calls.length, 5);
+    assert.equal(calls[3].method, 'DELETE');
+    assert.match(calls[3].url, /\/channels\/recruiting-channel\/messages\/1534651572061999304$/);
+    assert.equal(calls[4].method, 'DELETE');
+    assert.match(calls[4].url, /\/channels\/1534651572061999305$/);
+  });
+
   it('posts selected meme as a standalone channel message without referencing the candidate message', async () => {
     process.env.DISCORD_TOKEN = 'test-token';
     const calls = [];

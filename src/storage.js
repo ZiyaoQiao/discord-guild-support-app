@@ -4,14 +4,19 @@ import { fileURLToPath } from 'node:url';
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const dataDir = process.env.DATA_DIR ? resolve(process.env.DATA_DIR) : resolve(projectRoot, '.data');
-const storePath = resolve(dataDir, 'guild-support-store.json');
 
 const emptyStore = {
   profiles: {},
   lfg: {},
   builds: {},
   messageReactionRules: {},
+  schedules: {},
 };
+
+function currentStorePath() {
+  const currentDataDir = process.env.DATA_DIR ? resolve(process.env.DATA_DIR) : dataDir;
+  return resolve(currentDataDir, 'guild-support-store.json');
+}
 
 function guildKey(guildId) {
   return guildId || 'dm';
@@ -25,7 +30,7 @@ function createId(prefix, now = new Date()) {
 
 export async function readStore() {
   try {
-    const raw = await readFile(storePath, 'utf8');
+    const raw = await readFile(currentStorePath(), 'utf8');
     return { ...emptyStore, ...JSON.parse(raw) };
   } catch (error) {
     if (error.code === 'ENOENT') {
@@ -36,8 +41,62 @@ export async function readStore() {
 }
 
 export async function writeStore(store) {
-  await mkdir(dataDir, { recursive: true });
-  await writeFile(storePath, `${JSON.stringify(store, null, 2)}\n`);
+  const currentPath = currentStorePath();
+  await mkdir(dirname(currentPath), { recursive: true });
+  await writeFile(currentPath, `${JSON.stringify(store, null, 2)}\n`);
+}
+
+export async function saveScheduleMessage(guildId, schedule) {
+  const store = await readStore();
+  const key = guildKey(guildId);
+  store.schedules[key] ??= {};
+  store.schedules[key][schedule.messageId] = {
+    ...schedule,
+    createdAt: new Date().toISOString(),
+  };
+  const entries = Object.entries(store.schedules[key]);
+  if (entries.length > 200) {
+    store.schedules[key] = Object.fromEntries(entries.slice(-200));
+  }
+  await writeStore(store);
+  return store.schedules[key][schedule.messageId];
+}
+
+export async function getScheduleMessage(guildId, messageId) {
+  const store = await readStore();
+  return store.schedules[guildKey(guildId)]?.[messageId] ?? null;
+}
+
+export async function listScheduleMessages() {
+  const store = await readStore();
+  return Object.entries(store.schedules).flatMap(([guildId, schedules]) => (
+    Object.entries(schedules).map(([messageId, schedule]) => ({
+      ...schedule,
+      guildId,
+      messageId,
+    }))
+  ));
+}
+
+export async function updateScheduleMessage(guildId, messageId, updates) {
+  const store = await readStore();
+  const key = guildKey(guildId);
+  const schedule = store.schedules[key]?.[messageId];
+  if (!schedule) return null;
+  Object.assign(schedule, updates);
+  await writeStore(store);
+  return schedule;
+}
+
+export async function removeScheduleMessage(guildId, messageId) {
+  const store = await readStore();
+  const key = guildKey(guildId);
+  const entry = store.schedules[key]?.[messageId];
+  if (!entry) return null;
+  delete store.schedules[key][messageId];
+  if (Object.keys(store.schedules[key]).length === 0) delete store.schedules[key];
+  await writeStore(store);
+  return entry;
 }
 
 export async function saveProfile(guildId, userId, profile) {

@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import { afterEach, describe, it } from 'node:test';
-import { addMessageReaction } from '../src/discord.js';
+import {
+  addMessageReaction,
+  createThreadFromMessage,
+  deleteChannel,
+  getChannelMessage,
+  listReactionUsers,
+} from '../src/discord.js';
 import {
   findMessageReactionRule,
   findMessageReactionRules,
@@ -186,5 +192,35 @@ describe('Discord reaction REST helper', () => {
 
     assert.deepEqual(await addMessageReaction('channel-1', 'message-1', 'wwm:1234567890'), { sent: true });
     assert.equal(calls.length, 2);
+  });
+
+  it('reads messages and reaction users, then creates a message thread', async () => {
+    process.env.DISCORD_TOKEN = 'test-token';
+    const calls = [];
+    globalThis.fetch = async (url, options) => {
+      calls.push({ url, options });
+      if (url.endsWith('/channels/channel-1/messages/message-1')) {
+        return { ok: true, json: async () => ({ id: 'message-1', reactions: [] }) };
+      }
+      if (url.includes('/reactions/')) {
+        return { ok: true, json: async () => [{ id: 'user-1', bot: false }] };
+      }
+      return { ok: true, json: async () => ({ id: 'thread-1' }) };
+    };
+
+    assert.equal((await getChannelMessage('channel-1', 'message-1')).id, 'message-1');
+    assert.deepEqual(await listReactionUsers('channel-1', 'message-1', 'join:999'), [
+      { id: 'user-1', bot: false },
+    ]);
+    assert.equal(
+      (await createThreadFromMessage('channel-1', 'message-1', '活动提醒｜五人竞速')).id,
+      'thread-1',
+    );
+    assert.match(calls[1].url, /\/reactions\/join%3A999\?limit=100&type=0$/);
+    assert.match(calls[2].url, /\/channels\/channel-1\/messages\/message-1\/threads$/);
+    assert.equal(calls[2].options.method, 'POST');
+    assert.deepEqual(await deleteChannel('thread-1'), { deleted: true });
+    assert.match(calls[3].url, /\/channels\/thread-1$/);
+    assert.equal(calls[3].options.method, 'DELETE');
   });
 });
