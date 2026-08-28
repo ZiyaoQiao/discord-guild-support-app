@@ -15,6 +15,7 @@ import {
   reactToConfiguredMessage,
   resolveGuildEmojiName,
   resolveReactionEmojiInput,
+  startMessageReactionGatewayFromEnv,
 } from '../src/gateway-reactions.js';
 
 const originalDiscordToken = process.env.DISCORD_TOKEN;
@@ -153,6 +154,24 @@ describe('message reaction gateway config', () => {
       ['channel-1', 'message-1', 'wwm:1234567890'],
       ['channel-1', 'message-1', '13421142546174839:1495682797866713088'],
     ]);
+  });
+
+  it('starts the gateway when no reaction rules exist yet', async () => {
+    const gateway = { stop() {} };
+    let gatewayOptions;
+
+    const result = await startMessageReactionGatewayFromEnv({
+      env: { DISCORD_TOKEN: 'test-token' },
+      loadStoredRules: async () => [],
+      startGateway: (options) => {
+        gatewayOptions = options;
+        return gateway;
+      },
+    });
+
+    assert.equal(result, gateway);
+    assert.equal(gatewayOptions.token, 'test-token');
+    assert.equal(typeof gatewayOptions.rulesProvider, 'function');
   });
 });
 

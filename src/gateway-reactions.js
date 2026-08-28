@@ -307,16 +307,18 @@ export function startMessageReactionGateway({
   };
 }
 
-export async function startMessageReactionGatewayFromEnv() {
+export async function startMessageReactionGatewayFromEnv({
+  env = process.env,
+  loadStoredRules = getAllMessageReactionRules,
+  startGateway = startMessageReactionGateway,
+} = {}) {
   try {
-    const envRules = parseMessageReactionRules();
-    const storedRules = await getAllMessageReactionRules();
-    if (!envRules.length && !storedRules.length) {
-      return null;
-    }
+    const envRules = parseMessageReactionRules(env);
+    const storedRules = await loadStoredRules();
 
     console.log(`Starting message reaction gateway for ${envRules.length + storedRules.length} rule(s).`);
-    return startMessageReactionGateway({
+    return startGateway({
+      token: env.DISCORD_TOKEN,
       rulesProvider: (message) => getEffectiveMessageReactionRules(message.guild_id),
     });
   } catch (error) {
