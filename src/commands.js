@@ -53,6 +53,54 @@ export const SUPPORT_COMMAND = {
   ],
 };
 
+export const SCHEDULE_COMMAND = {
+  name: 'schedule',
+  description: '发布一条格式统一的组队招募',
+  type: CommandType.CHAT_INPUT,
+  ...guildCommandContext,
+  options: [
+    {
+      type: CommandOptionType.STRING,
+      name: 'time',
+      description: '必须含具体时刻，例如：明晚十点，后天20:00，这周日晚9点',
+      required: true,
+      min_length: 2,
+      max_length: 100,
+    },
+    {
+      type: CommandOptionType.STRING,
+      name: 'zone',
+      description: '时区，例如：美东，美西，美中，加东，加西',
+      required: true,
+      min_length: 2,
+      max_length: 30,
+    },
+    {
+      type: CommandOptionType.STRING,
+      name: 'activity',
+      description: '招募活动，例如：五人竞速，十人竞速，群策，演武',
+      required: true,
+      min_length: 1,
+      max_length: 100,
+    },
+  ],
+};
+
+export const CANCEL_COMMAND = {
+  name: 'cancel',
+  description: '取消自己通过 /schedule 发布的招募',
+  type: CommandType.CHAT_INPUT,
+  ...guildCommandContext,
+  options: [{
+    type: CommandOptionType.STRING,
+    name: 'message_id',
+    description: '招募消息的 Message ID',
+    required: true,
+    min_length: 17,
+    max_length: 22,
+  }],
+};
+
 export const WWM_GUIDE_COMMAND = {
   name: 'wwm-guide',
   description: '显示燕云十六声帮会快捷指南',
@@ -502,6 +550,8 @@ export const AUTO_REACTION_COMMAND = {
 
 export const ALL_COMMANDS = [
   SUPPORT_COMMAND,
+  SCHEDULE_COMMAND,
+  CANCEL_COMMAND,
   WWM_GUIDE_COMMAND,
   EVENT_PLAN_COMMAND,
   NEWS_COMMAND,

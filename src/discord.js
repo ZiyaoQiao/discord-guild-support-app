@@ -71,7 +71,7 @@ export async function postChannelMessage(channelId, message) {
     return { sent: false, reason: 'missing_channel' };
   }
 
-  await DiscordRequest(`channels/${channelId}/messages`, {
+  const response = await DiscordRequest(`channels/${channelId}/messages`, {
     method: 'POST',
     body: {
       allowed_mentions: { parse: [] },
@@ -79,7 +79,71 @@ export async function postChannelMessage(channelId, message) {
     },
   });
 
-  return { sent: true };
+  const postedMessage = typeof response.json === 'function' ? await response.json() : undefined;
+  return { sent: true, message: postedMessage };
+}
+
+export async function deleteChannelMessage(channelId, messageId) {
+  if (!channelId || !messageId) {
+    return { deleted: false, reason: 'missing_message_target' };
+  }
+
+  await DiscordRequest(`channels/${channelId}/messages/${messageId}`, {
+    method: 'DELETE',
+  });
+  return { deleted: true };
+}
+
+export async function deleteChannel(channelId) {
+  if (!channelId) return { deleted: false, reason: 'missing_channel' };
+  await DiscordRequest(`channels/${channelId}`, { method: 'DELETE' });
+  return { deleted: true };
+}
+
+export async function getChannelMessage(channelId, messageId) {
+  const response = await DiscordRequest(`channels/${channelId}/messages/${messageId}`, {
+    method: 'GET',
+  });
+  return response.json();
+}
+
+export async function listReactionUsers(channelId, messageId, emoji, reactionType = 0) {
+  const users = [];
+  let after;
+  do {
+    const query = new URLSearchParams({ limit: '100', type: String(reactionType) });
+    if (after) query.set('after', after);
+    const response = await DiscordRequest(
+      `channels/${channelId}/messages/${messageId}/reactions/${encodeURIComponent(emoji)}?${query}`,
+      { method: 'GET' },
+    );
+    const page = await response.json();
+    users.push(...page);
+    after = page.length === 100 ? page.at(-1)?.id : undefined;
+  } while (after);
+  return users;
+}
+
+export async function createThreadFromMessage(channelId, messageId, name) {
+  const response = await DiscordRequest(`channels/${channelId}/messages/${messageId}/threads`, {
+    method: 'POST',
+    body: {
+      name: String(name || '活动提醒').slice(0, 100),
+      auto_archive_duration: 1440,
+    },
+  });
+  return response.json();
+}
+
+export async function findGuildChannelByName(guildId, channelName) {
+  if (!guildId || !channelName) return undefined;
+  const response = await DiscordRequest(`guilds/${guildId}/channels`, { method: 'GET' });
+  const channels = await response.json();
+  const normalizedName = channelName.toLowerCase();
+  return channels.find((channel) => (
+    (channel.type === 0 || channel.type === 5)
+    && channel.name?.toLowerCase() === normalizedName
+  ));
 }
 
 export async function addMessageReaction(channelId, messageId, emoji) {

@@ -17,6 +17,7 @@ App 面向 Discord 用户的展示文案默认使用简体中文。
 | 功能 | Discord 命令或接口 | 用途 |
 | --- | --- | --- |
 | 私密支援请求 | `/support` | 收集问题分类、紧急程度和说明，可投递到管理组频道 |
+| 组队招募 | `/schedule` | 发布统一格式的招募，并在开始前 15 分钟通过 thread 提醒参与者 |
 | 帮会快捷指南 | `/wwm-guide` | 展示新人、活动、配装、支援等主题指南 |
 | 活动草案 | `/event-plan` | 快速生成一条帮会活动安排草案 |
 | 官方新闻 | `/news` | 读取繁体中文官方新闻、补丁和公告摘要 |
@@ -51,6 +52,8 @@ DISCORD_TOKEN=<你的 Discord Bot Token>
 PUBLIC_KEY=<你的 Discord Application Public Key>
 GUILD_ID=<你的测试服务器 ID>
 SUPPORT_CHANNEL_ID=<管理组支援频道 ID>
+GROUP_RECRUITING_CHANNEL_ID=<组队招募频道 ID，可选>
+GROUP_RECRUITING_CHANNEL_NAME=group-recruiting
 DATA_DIR=.data
 WWM_OFFICIAL_NEWS_URL=https://www.wherewindsmeetgame.com/hmt/news/index.html
 TRANSLATE_API_URL=<可选，兼容 LibreTranslate 的 /translate 接口地址>
@@ -106,6 +109,8 @@ curl http://localhost:3000/healthz
 
 如果你配置了 `SUPPORT_CHANNEL_ID`，bot 需要能在那个频道发送消息。
 
+`/schedule` 优先使用 `GROUP_RECRUITING_CHANNEL_ID`；未配置时会自动寻找 `GROUP_RECRUITING_CHANNEL_NAME` 指定的文字频道。bot 需要在该频道拥有 `View Channel`、`Read Message History`、`Send Messages`、`Create Public Threads` 和 `Send Messages in Threads` 权限；建议同时授予 `Manage Threads`，以便取消活动时删除对应 thread。
+
 如果你配置了自动消息反应，bot 还需要在目标频道拥有：
 
 - `View Channel`
@@ -137,6 +142,34 @@ https://<your-tunnel-host>/interactions
 ```text
 /support category:配装 details:我想优化 PvE 输出循环 urgency:普通
 ```
+
+发布组队招募：
+
+```text
+/schedule time:明晚十点 zone:美东 activity:五人竞速
+```
+
+bot 会在 `#group-recruiting` 发布：
+
+```text
+招募：五人竞速
+时间：8/6/2026 周四 晚上 10:00（美东）
+发起人：@发起人
+
+👇 有意参加？请点击下方 👍 或任意表情报名！
+```
+
+`zone` 为必填项，支持美东、美西、美中、美山、加东、加西、加中，以及 ET、PT、CT、MT 等常用缩写。
+
+`time` 必须包含具体时刻，例如“明晚十点”“后天20:00”“这周日晚9点”或“十月一号晚9点”，并且活动时间必须晚于发布时刻。招募发布后，bot 会立即在消息下创建 thread；活动开始前 15 分钟，再在该 thread 中发送“时间差不多咯！”并提醒原发起人和所有给招募消息添加过 reaction 的非 bot 用户。重复添加不同 reaction 的成员只会被提醒一次；服务重启不会清除尚未触发的提醒。
+
+需要取消时，在 Discord 打开 `User Settings` → `Advanced` → 开启 `Developer Mode`，然后右键招募消息并选择 `Copy Message ID`：
+
+```text
+/cancel message_id:1534651572061999304
+```
+
+只有原发起人可以取消，bot 会从 `#group-recruiting` 撤回对应消息，并删除该消息创建的 thread。
 
 查看帮会指南：
 

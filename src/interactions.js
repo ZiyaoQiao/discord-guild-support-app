@@ -11,18 +11,29 @@ import {
   searchMemeStickers,
 } from './integrations/meme-stickers.js';
 import { translateText } from './integrations/translate.js';
-import { postChannelMessage } from './discord.js';
+import {
+  addMessageReaction,
+  createThreadFromMessage,
+  deleteChannel,
+  deleteChannelMessage,
+  findGuildChannelByName,
+  postChannelMessage,
+} from './discord.js';
+import { buildRecruitingMessage, parseScheduleFields } from './schedule.js';
 import {
   addMessageReactionRule,
   createLfg,
+  getScheduleMessage,
   getMessageReactionRules,
   getProfile,
   joinLfg,
   listOpenLfg,
   removeMessageReactionRule,
+  removeScheduleMessage,
   saveBuild,
   saveMessageReactionRule,
   saveProfile,
+  saveScheduleMessage,
   searchBuilds,
   voteBuild,
 } from './storage.js';
@@ -151,6 +162,90 @@ async function handleSupportCommand(interaction, options) {
   return submitSupportTicket(interaction, { category, urgency, details });
 }
 
+async function handleScheduleCommand(interaction, options) {
+  const schedule = parseScheduleFields({
+    time: getOption(options, 'time'),
+    zone: getOption(options, 'zone'),
+    activity: getOption(options, 'activity'),
+  });
+  const channelName = process.env.GROUP_RECRUITING_CHANNEL_NAME || 'group-recruiting';
+  let channelId = process.env.GROUP_RECRUITING_CHANNEL_ID;
+  if (!channelId) {
+    const channel = await findGuildChannelByName(interaction.guild_id, channelName);
+    channelId = channel?.id;
+  }
+  if (!channelId) {
+    throw new Error(`找不到 #${channelName}，请检查频道名称或配置 GROUP_RECRUITING_CHANNEL_ID。`);
+  }
+  const userId = getUserId(interaction);
+  const result = await postChannelMessage(channelId, buildRecruitingMessage(schedule, userId));
+  const messageId = result.message?.id;
+  if (!messageId) {
+    throw new Error('Discord 没有返回招募消息 ID，无法启用取消功能。');
+  }
+
+  let threadId;
+  try {
+    await addMessageReaction(channelId, messageId, '👍');
+    const thread = await createThreadFromMessage(
+      channelId,
+      messageId,
+      `活动讨论｜${schedule.activity}`,
+    );
+    threadId = thread.id;
+    if (!threadId) throw new Error('Discord 没有返回活动 thread ID。');
+    await saveScheduleMessage(interaction.guild_id, {
+      messageId,
+      channelId,
+      threadId,
+      ownerId: userId,
+      activity: schedule.activity,
+      formattedTime: schedule.formattedTime,
+      eventAt: schedule.eventAt,
+    });
+  } catch (error) {
+    if (threadId) await deleteChannel(threadId).catch(() => {});
+    await deleteChannelMessage(channelId, messageId).catch(() => {});
+    throw error;
+  }
+
+  return ephemeral(
+    `已发布到 <#${channelId}> 并创建 <#${threadId}>：${schedule.activity} · ${schedule.formattedTime}\n`
+    + 'Bot 会在活动开始前 15 分钟在 thread 中提醒参与者。\n'
+    + `Message ID：${messageId}\n取消时使用：\`/cancel message_id:${messageId}\``,
+  );
+}
+
+async function handleCancelCommand(interaction, options) {
+  const messageId = String(getOption(options, 'message_id', '')).trim();
+  if (!/^\d{17,22}$/.test(messageId)) {
+    throw new Error('Message ID 格式不正确。请右键招募消息并选择 Copy Message ID。');
+  }
+
+  const schedule = await getScheduleMessage(interaction.guild_id, messageId);
+  if (!schedule) {
+    throw new Error('找不到由 /schedule 发布的这条招募消息。');
+  }
+  if (schedule.ownerId !== getUserId(interaction)) {
+    throw new Error('只有原发起人可以取消这条招募。');
+  }
+
+  try {
+    await deleteChannelMessage(schedule.channelId, messageId);
+  } catch (error) {
+    if (!String(error?.message || error).includes('Discord API 404')) throw error;
+  }
+  if (schedule.threadId) {
+    await deleteChannel(schedule.threadId).catch((error) => {
+      if (!String(error?.message || error).includes('Discord API 404')) {
+        console.error(`Failed to delete schedule thread ${schedule.threadId}`, error);
+      }
+    });
+  }
+  await removeScheduleMessage(interaction.guild_id, messageId);
+  return ephemeral(`已取消并撤回招募：${schedule.activity}`);
+}
+
 async function handleProfileCommand(interaction, options) {
   const subcommand = getSubcommand(options);
   const subOptions = subcommand?.options ?? [];
@@ -255,6 +350,14 @@ async function handleCommand(interaction) {
 
   if (name === 'support') {
     return handleSupportCommand(interaction, options);
+  }
+
+  if (name === 'schedule') {
+    return handleScheduleCommand(interaction, options);
+  }
+
+  if (name === 'cancel') {
+    return handleCancelCommand(interaction, options);
   }
 
   if (name === 'wwm-guide') {
@@ -423,15 +526,15 @@ export async function handleInteraction(interaction) {
     }
 
     if (interaction.type === InteractionType.APPLICATION_COMMAND) {
-      return handleCommand(interaction);
+      return await handleCommand(interaction);
     }
 
     if (interaction.type === InteractionType.MESSAGE_COMPONENT) {
-      return handleComponent(interaction);
+      return await handleComponent(interaction);
     }
 
     if (interaction.type === InteractionType.MODAL_SUBMIT) {
-      return handleModalSubmit(interaction);
+      return await handleModalSubmit(interaction);
     }
 
     return ephemeral(`暂不支持的交互类型：${interaction.type}`);
