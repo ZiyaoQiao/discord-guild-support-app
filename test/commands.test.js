@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { ALL_COMMANDS, SCHEDULE_COMMAND } from '../src/commands.js';
+import { ALL_COMMANDS, GUILDWAR_COMMAND, SCHEDULE_COMMAND } from '../src/commands.js';
 
 describe('Discord command definitions', () => {
   it('places all required options before optional options', () => {
@@ -23,5 +23,18 @@ describe('Discord command definitions', () => {
       { name: 'zone', required: true },
       { name: 'activity', required: true },
     ]);
+  });
+
+  it('requires a string start delay and makes both guildwar channels optional', () => {
+    const setup = GUILDWAR_COMMAND.options.find((option) => option.name === 'setup');
+    assert.equal(GUILDWAR_COMMAND.name, 'guildwar');
+    assert.deepEqual(setup.options.map(({ name, required }) => ({ name, required })), [
+      { name: 'start_in_minutes', required: true },
+      { name: 'channel_one', required: false },
+      { name: 'channel_two', required: false },
+    ]);
+    assert.equal(setup.options[0].type, 3);
+    assert.deepEqual(setup.options[1].channel_types, [2]);
+    assert.deepEqual(setup.options[2].channel_types, [2]);
   });
 });

@@ -5,6 +5,7 @@ import { handleInteraction } from './interactions.js';
 import { translateText } from './integrations/translate.js';
 import { startMessageReactionGatewayFromEnv } from './gateway-reactions.js';
 import { startScheduleReminderWorker } from './schedule-reminders.js';
+import { baiyeVoiceService } from './baiye-voice.js';
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -52,4 +53,7 @@ app.listen(port, () => {
   console.log(`Listening on port ${port}`);
   startMessageReactionGatewayFromEnv();
   startScheduleReminderWorker();
+  baiyeVoiceService.prepare().catch((error) => {
+    console.error('Baiye voice gateway failed to start', error);
+  });
 });

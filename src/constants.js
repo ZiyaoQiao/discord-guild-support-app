@@ -25,7 +25,9 @@ export const CommandType = {
 export const CommandOptionType = {
   SUB_COMMAND: 1,
   STRING: 3,
+  INTEGER: 4,
   BOOLEAN: 5,
+  CHANNEL: 7,
 };
 
 export const ComponentType = {

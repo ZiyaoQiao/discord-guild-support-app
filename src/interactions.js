@@ -17,9 +17,14 @@ import {
   deleteChannel,
   deleteChannelMessage,
   findGuildChannelByName,
+  findGuildVoiceChannelByName,
   postChannelMessage,
 } from './discord.js';
 import { buildRecruitingMessage, parseScheduleFields } from './schedule.js';
+import {
+  baiyeVoiceService,
+  formatRemainingDuration,
+} from './baiye-voice.js';
 import {
   addMessageReactionRule,
   createLfg,
@@ -86,7 +91,7 @@ import {
 } from './views.js';
 
 function getSubcommand(options = []) {
-  return options.find((option) => Array.isArray(option.options));
+  return options.find((option) => option.type === 1 || Array.isArray(option.options));
 }
 
 function getUserId(interaction) {
@@ -214,6 +219,90 @@ async function handleScheduleCommand(interaction, options) {
     + 'Bot 会在活动开始前 15 分钟在 thread 中提醒参与者。\n'
     + `Message ID：${messageId}\n取消时使用：\`/cancel message_id:${messageId}\``,
   );
+}
+
+function canManageGuild(interaction) {
+  try {
+    const permissions = BigInt(interaction.member?.permissions || 0);
+    return Boolean(permissions & 0x8n) || Boolean(permissions & 0x20n);
+  } catch {
+    return false;
+  }
+}
+
+function baiyeStatusMessage(session) {
+  if (!session) return '目前没有已设置或进行中的百业战语音提醒。';
+  if (session.phase === 'waiting') {
+    return [
+      `百业战将在 ${formatRemainingDuration(session.remainingToStartMs)}后开始。`,
+      `一队频道：<#${session.channelOneId}>（刷新前 35 秒）`,
+      `二队频道：<#${session.channelTwoId}>（一队播完后立即接续）`,
+      'Bot 会在第 5、10、15、20、25 分钟刷新前先后进入两个频道，每个频道播完即退出。',
+    ].join('\n');
+  }
+  if (session.phase === 'error') {
+    return `百业战语音提醒启动失败：${session.errorMessage || '未知错误'}`;
+  }
+  return [
+    `百业战进行中，距离结束还有 ${formatRemainingDuration(session.remainingToEndMs)}。`,
+    `一队频道：<#${session.channelOneId}>（刷新前 35 秒）`,
+    `二队频道：<#${session.channelTwoId}>（一队播完后立即接续）`,
+  ].join('\n');
+}
+
+const DEFAULT_GUILDWAR_CHANNEL_ONE_NAME = '百业战进攻队';
+const DEFAULT_GUILDWAR_CHANNEL_TWO_NAME = '百业战防守队';
+
+async function handleBaiyeCommand(interaction, options, service, findVoiceChannel) {
+  const subcommand = getSubcommand(options);
+  const subOptions = subcommand?.options ?? [];
+  const guildId = interaction.guild_id;
+  const userId = getUserId(interaction);
+
+  if (!guildId) throw new Error('百业战语音提醒只能在 Discord 服务器中使用。');
+
+  if (subcommand?.name === 'setup') {
+    let channelOneId = String(
+      getOption(subOptions, 'channel_one', '') || process.env.GUILDWAR_CHANNEL_ONE_ID || '',
+    ).trim();
+    let channelTwoId = String(
+      getOption(subOptions, 'channel_two', '') || process.env.GUILDWAR_CHANNEL_TWO_ID || '',
+    ).trim();
+    const [defaultChannelOne, defaultChannelTwo] = await Promise.all([
+      channelOneId ? undefined : findVoiceChannel(guildId, DEFAULT_GUILDWAR_CHANNEL_ONE_NAME),
+      channelTwoId ? undefined : findVoiceChannel(guildId, DEFAULT_GUILDWAR_CHANNEL_TWO_NAME),
+    ]);
+    channelOneId ||= defaultChannelOne?.id || '';
+    channelTwoId ||= defaultChannelTwo?.id || '';
+    if (!channelOneId) throw new Error(`找不到默认语音频道“${DEFAULT_GUILDWAR_CHANNEL_ONE_NAME}”。`);
+    if (!channelTwoId) throw new Error(`找不到默认语音频道“${DEFAULT_GUILDWAR_CHANNEL_TWO_NAME}”。`);
+    const startIn = getOption(subOptions, 'start_in_minutes');
+    const session = await service.setup({
+      guildId,
+      channelOneId,
+      channelTwoId,
+      ownerId: userId,
+      startIn,
+    });
+    if (session.phase === 'error') throw new Error(session.errorMessage);
+    return ephemeral(`百业战语音提醒已设置。\n${baiyeStatusMessage(session)}`);
+  }
+
+  if (subcommand?.name === 'status') {
+    return ephemeral(baiyeStatusMessage(service.getSession(guildId)));
+  }
+
+  if (subcommand?.name === 'stop') {
+    const session = service.getSession(guildId);
+    if (!session) return ephemeral('目前没有需要停止的百业战语音提醒。');
+    if (session.ownerId !== userId && !canManageGuild(interaction)) {
+      throw new Error('只有设置提醒的人或服务器管理员可以停止百业战提醒。');
+    }
+    service.stop(guildId);
+    return ephemeral('已停止百业战语音提醒，Bot 将离开语音频道。');
+  }
+
+  throw new Error('未知百业战操作。');
 }
 
 async function handleCancelCommand(interaction, options) {
@@ -345,7 +434,13 @@ async function handleAutoReactionCommand(interaction, options) {
   return ephemeral('未知自动反应操作。');
 }
 
-async function handleCommand(interaction) {
+async function handleCommand(
+  interaction,
+  {
+    baiyeService = baiyeVoiceService,
+    findVoiceChannel = findGuildVoiceChannelByName,
+  } = {},
+) {
   const { name, options = [] } = interaction.data;
 
   if (name === 'support') {
@@ -358,6 +453,10 @@ async function handleCommand(interaction) {
 
   if (name === 'cancel') {
     return handleCancelCommand(interaction, options);
+  }
+
+  if (name === 'guildwar') {
+    return handleBaiyeCommand(interaction, options, baiyeService, findVoiceChannel);
   }
 
   if (name === 'wwm-guide') {
@@ -519,14 +618,14 @@ async function handleModalSubmit(interaction) {
   return ephemeral(`未知表单：${customId}`);
 }
 
-export async function handleInteraction(interaction) {
+export async function handleInteraction(interaction, dependencies = {}) {
   try {
     if (interaction.type === InteractionType.PING) {
       return { type: InteractionResponseType.PONG };
     }
 
     if (interaction.type === InteractionType.APPLICATION_COMMAND) {
-      return await handleCommand(interaction);
+      return await handleCommand(interaction, dependencies);
     }
 
     if (interaction.type === InteractionType.MESSAGE_COMPONENT) {
