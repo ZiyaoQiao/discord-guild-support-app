@@ -18,6 +18,7 @@ App 面向 Discord 用户的展示文案默认使用简体中文。
 | --- | --- | --- |
 | 私密支援请求 | `/support` | 收集问题分类、紧急程度和说明，可投递到管理组频道 |
 | 组队招募 | `/schedule` | 发布统一格式的招募，并在开始前 15 分钟通过 thread 提醒参与者 |
+| 百业战语音提醒 | `/guildwar setup`、`/guildwar status`、`/guildwar stop` | 提前设置两队语音频道，开战后依次进入播报 |
 | 帮会快捷指南 | `/wwm-guide` | 展示新人、活动、配装、支援等主题指南 |
 | 活动草案 | `/event-plan` | 快速生成一条帮会活动安排草案 |
 | 官方新闻 | `/news` | 读取繁体中文官方新闻、补丁和公告摘要 |
@@ -38,6 +39,8 @@ App 面向 Discord 用户的展示文案默认使用简体中文。
 
 ## 第一次启动
 
+需要 Node.js `22.12.0` 或更高版本；生产环境建议使用 Node.js 24 LTS，以支持 Discord 当前的 DAVE 语音加密协议。
+
 先复制环境变量模板：
 
 ```sh
@@ -54,6 +57,11 @@ GUILD_ID=<你的测试服务器 ID>
 SUPPORT_CHANNEL_ID=<管理组支援频道 ID>
 GROUP_RECRUITING_CHANNEL_ID=<组队招募频道 ID，可选>
 GROUP_RECRUITING_CHANNEL_NAME=group-recruiting
+BAIYE_WARNING_AUDIO_FILE=<可选，自定义 48kHz、16-bit、双声道 PCM WAV>
+BAIYE_DRAGON_WARNING_AUDIO_FILE=<可选，自定义大龙提醒 WAV，格式同上>
+BAIYE_WARNING_GAIN=<可选，语音增益 1-4，默认 2.2>
+GUILDWAR_CHANNEL_ONE_ID=<可选，默认进攻队语音频道 ID>
+GUILDWAR_CHANNEL_TWO_ID=<可选，默认防守队语音频道 ID>
 DATA_DIR=.data
 WWM_OFFICIAL_NEWS_URL=https://www.wherewindsmeetgame.com/hmt/news/index.html
 TRANSLATE_API_URL=<可选，兼容 LibreTranslate 的 /translate 接口地址>
@@ -110,6 +118,8 @@ curl http://localhost:3000/healthz
 如果你配置了 `SUPPORT_CHANNEL_ID`，bot 需要能在那个频道发送消息。
 
 `/schedule` 优先使用 `GROUP_RECRUITING_CHANNEL_ID`；未配置时会自动寻找 `GROUP_RECRUITING_CHANNEL_NAME` 指定的文字频道。bot 需要在该频道拥有 `View Channel`、`Read Message History`、`Send Messages`、`Create Public Threads` 和 `Send Messages in Threads` 权限；建议同时授予 `Manage Threads`，以便取消活动时删除对应 thread。
+
+`/guildwar setup` 默认使用“百业战进攻队”和“百业战防守队”两个普通语音频道，也可以用 `channel_one` 和 `channel_two` 手动覆盖。bot 需要在两个频道都拥有 `View Channel`、`Connect` 和 `Speak` 权限。这个功能使用普通的 `GUILDS` 和 `GUILD_VOICE_STATES` intents，不需要开启特权 intent。仓库已包含野怪和大龙两种中文 WAV；每次提醒会使用软限幅增益连续播放两遍。可以通过 `BAIYE_WARNING_AUDIO_FILE` 和 `BAIYE_DRAGON_WARNING_AUDIO_FILE` 换成同格式音频，或用 `BAIYE_WARNING_GAIN` 在 1-4 之间调节增益。指令回复为仅执行者可见。
 
 如果你配置了自动消息反应，bot 还需要在目标频道拥有：
 
@@ -170,6 +180,25 @@ bot 会在 `#group-recruiting` 发布：
 ```
 
 只有原发起人可以取消，bot 会从 `#group-recruiting` 撤回对应消息，并删除该消息创建的 thread。
+
+提前设置百业战语音提醒：
+
+```text
+/guildwar setup start_in_minutes:1:29
+```
+
+`1:29` 表示 1 分 29 秒后开战；纯数字按分钟计算，例如 `10` 表示 10 分钟。如需要手动换频道，再填写可选的 `channel_one` 和 `channel_two`。
+
+Bot 会先等待指定的开战时间（上例为 1 分 29 秒），开战时从 30 分钟开始倒计时。在第 5、10、15、20、25 分钟刷新前 35 秒，Bot 会进入一队频道大音量连续播报两遍并退出，然后立即进入二队频道播放两遍并退出。倒计时剩余 17:05 和 16:05 时，也会按相同频道顺序各播放两遍“大龙即将刷新！请多注意播报和小地图！”。二队不再使用独立计时。第 30 分钟结束时不播报。
+
+查看倒计时或停止提醒：
+
+```text
+/guildwar status
+/guildwar stop
+```
+
+每个服务器同时只能有一个百业战提醒。同一个 Bot 账号不能同时加入两个语音频道，因此两队播报会严格串行；如果第一队播报超时，第二队会在第一队退出后立即播报。只有设置者或拥有 `Manage Server` / `Administrator` 权限的人可以停止。当前倒计时保存在进程内；如果服务在开战前或活动中重启，需要重新执行 `/guildwar setup`。
 
 查看帮会指南：
 
@@ -402,6 +431,7 @@ npm run dev
 
 ```text
 src/app.js                         Express app、健康检查、翻译 HTTP 接口、Discord interactions endpoint
+src/baiye-voice.js                百业战倒计时、Discord 语音连接和 PCM 播报
 src/commands.js                    Slash command 定义和注册入口
 src/interactions.js                命令、按钮和 modal 的路由
 src/storage.js                     成员档案、组队和配装的本地 JSON 存储

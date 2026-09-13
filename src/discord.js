@@ -146,6 +146,20 @@ export async function findGuildChannelByName(guildId, channelName) {
   ));
 }
 
+export async function findGuildVoiceChannelByName(guildId, channelName) {
+  if (!guildId || !channelName) return undefined;
+  const response = await DiscordRequest(`guilds/${guildId}/channels`, { method: 'GET' });
+  const channels = await response.json();
+  const normalizedName = channelName.trim().toLowerCase();
+  return channels.find((channel) => (
+    channel.type === 2
+    && (
+      channel.name?.trim().toLowerCase() === normalizedName
+      || channel.name?.trim().toLowerCase().startsWith(`${normalizedName} |`)
+    )
+  ));
+}
+
 export async function addMessageReaction(channelId, messageId, emoji) {
   if (!channelId || !messageId || !emoji) {
     return { sent: false, reason: 'missing_reaction_target' };

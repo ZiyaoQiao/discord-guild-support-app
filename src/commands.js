@@ -101,6 +101,54 @@ export const CANCEL_COMMAND = {
   }],
 };
 
+export const GUILDWAR_COMMAND = {
+  name: 'guildwar',
+  description: '设置百业战语音刷新提醒',
+  type: CommandType.CHAT_INPUT,
+  ...guildCommandContext,
+  options: [
+    {
+      type: CommandOptionType.SUB_COMMAND,
+      name: 'setup',
+      description: '选择两队语音频道并设置距离开战时间',
+      options: [
+        {
+          type: CommandOptionType.STRING,
+          name: 'start_in_minutes',
+          description: '距离开战时间：10 表示 10 分钟，1:29 表示 1 分 29 秒',
+          required: true,
+          min_length: 1,
+          max_length: 6,
+        },
+        {
+          type: CommandOptionType.CHANNEL,
+          name: 'channel_one',
+          description: '可选，默认百业战进攻队',
+          required: false,
+          channel_types: [2],
+        },
+        {
+          type: CommandOptionType.CHANNEL,
+          name: 'channel_two',
+          description: '可选，默认百业战防守队',
+          required: false,
+          channel_types: [2],
+        },
+      ],
+    },
+    {
+      type: CommandOptionType.SUB_COMMAND,
+      name: 'status',
+      description: '查看距离开战或结束还剩多久',
+    },
+    {
+      type: CommandOptionType.SUB_COMMAND,
+      name: 'stop',
+      description: '取消等待或停止当前百业战提醒',
+    },
+  ],
+};
+
 export const WWM_GUIDE_COMMAND = {
   name: 'wwm-guide',
   description: '显示燕云十六声帮会快捷指南',
@@ -552,6 +600,7 @@ export const ALL_COMMANDS = [
   SUPPORT_COMMAND,
   SCHEDULE_COMMAND,
   CANCEL_COMMAND,
+  GUILDWAR_COMMAND,
   WWM_GUIDE_COMMAND,
   EVENT_PLAN_COMMAND,
   NEWS_COMMAND,

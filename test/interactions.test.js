@@ -200,4 +200,132 @@ describe('interaction routing', () => {
     assert.equal(response.type, InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE);
     assert.match(response.data.content, /只有 <@&role-1> 可以修改自动反应设置/);
   });
+
+  it('keeps guildwar setup, status, and control responses private', async () => {
+    const calls = [];
+    let session;
+    const baiyeService = {
+      async setup(input) {
+        calls.push(['setup', input]);
+        session = {
+          ...input,
+          phase: 'waiting',
+          remainingToStartMs: 10 * 60 * 1000,
+          remainingToEndMs: 40 * 60 * 1000,
+        };
+        return session;
+      },
+      getSession() {
+        return session;
+      },
+      stop(guildId) {
+        calls.push(['stop', guildId]);
+        const previous = session;
+        session = null;
+        return previous;
+      },
+    };
+    const setupInteraction = {
+      type: 2,
+      guild_id: 'guild-1',
+      member: { user: { id: 'user-1', username: 'tester' } },
+      data: {
+        name: 'guildwar',
+        options: [{
+          name: 'setup',
+          options: [
+            { name: 'start_in_minutes', value: '10' },
+            { name: 'channel_one', value: 'voice-1' },
+            { name: 'channel_two', value: 'voice-2' },
+          ],
+        }],
+      },
+    };
+
+    const setupResponse = await handleInteraction(setupInteraction, { baiyeService });
+    assert.equal(setupResponse.data.flags, 64);
+    assert.match(setupResponse.data.content, /已设置/);
+    assert.match(setupResponse.data.content, /10 分钟后开始/);
+    assert.match(setupResponse.data.content, /<#voice-1>/);
+    assert.match(setupResponse.data.content, /<#voice-2>/);
+    assert.deepEqual(calls[0], ['setup', {
+      guildId: 'guild-1',
+      channelOneId: 'voice-1',
+      channelTwoId: 'voice-2',
+      ownerId: 'user-1',
+      startIn: '10',
+    }]);
+
+    const status = await handleInteraction({
+      ...setupInteraction,
+      data: { name: 'guildwar', options: [{ type: 1, name: 'status' }] },
+    }, { baiyeService });
+    assert.equal(status.data.flags, 64);
+    assert.match(status.data.content, /10 分钟后开始/);
+    assert.match(status.data.content, /第 5、10、15、20、25 分钟/);
+    assert.match(status.data.content, /播完即退出/);
+
+    const denied = await handleInteraction({
+      ...setupInteraction,
+      member: { user: { id: 'user-2', username: 'other' } },
+      data: { name: 'guildwar', options: [{ type: 1, name: 'stop' }] },
+    }, { baiyeService });
+    assert.equal(denied.data.flags, 64);
+    assert.match(denied.data.content, /只有设置提醒的人或服务器管理员/);
+    assert.equal(calls.length, 1);
+
+    const stopped = await handleInteraction({
+      ...setupInteraction,
+      member: { permissions: '32', user: { id: 'admin-1', username: 'admin' } },
+      data: { name: 'guildwar', options: [{ type: 1, name: 'stop' }] },
+    }, { baiyeService });
+    assert.equal(stopped.data.flags, 64);
+    assert.match(stopped.data.content, /已停止/);
+    assert.deepEqual(calls[1], ['stop', 'guild-1']);
+  });
+
+  it('resolves the two default guildwar voice channels when overrides are omitted', async () => {
+    const resolvedNames = [];
+    let setupInput;
+    const baiyeService = {
+      async setup(input) {
+        setupInput = input;
+        return {
+          ...input,
+          phase: 'waiting',
+          remainingToStartMs: 89_000,
+          remainingToEndMs: (30 * 60 * 1000) + 89_000,
+        };
+      },
+    };
+    const findVoiceChannel = async (_guildId, name) => {
+      resolvedNames.push(name);
+      return { id: name.includes('进攻') ? 'attack-voice' : 'defense-voice' };
+    };
+
+    const response = await handleInteraction({
+      type: 2,
+      guild_id: 'guild-defaults',
+      member: { user: { id: 'user-1', username: 'tester' } },
+      data: {
+        name: 'guildwar',
+        options: [{
+          type: 1,
+          name: 'setup',
+          options: [{ name: 'start_in_minutes', value: '1:29' }],
+        }],
+      },
+    }, { baiyeService, findVoiceChannel });
+
+    assert.equal(response.data.flags, 64);
+    assert.match(response.data.content, /1 分 29 秒后开始/);
+    assert.deepEqual(resolvedNames, ['百业战进攻队', '百业战防守队']);
+    assert.deepEqual(setupInput, {
+      guildId: 'guild-defaults',
+      channelOneId: 'attack-voice',
+      channelTwoId: 'defense-voice',
+      ownerId: 'user-1',
+      startIn: '1:29',
+    });
+  });
 });
